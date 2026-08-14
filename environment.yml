@@ -1,0 +1,9 @@
+name: inquiry-analysis
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - nodejs>=22.13,<23
+  - pip
+  - pip:
+      - -r requirements-local.txt
