@@ -70,6 +70,26 @@ FINANCIAL_KEYWORDS = (
     "所得税",
 )
 
+TABULAR_HEADER_HINTS = (
+    "项目",
+    "科目",
+    "指标",
+    "名称",
+    "期间",
+    "本期",
+    "上期",
+    "年度",
+    "季度",
+    "item",
+    "account",
+    "description",
+    "line item",
+    "year ended",
+    "months ended",
+    "period",
+    "as of",
+)
+
 
 def normalize_text(value: object) -> str:
     if value is None:
@@ -77,6 +97,55 @@ def normalize_text(value: object) -> str:
     text = str(value).replace("\x00", " ")
     text = re.sub(r"[ \t]+", " ", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def column_name(index: int) -> str:
+    name = ""
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        name = chr(65 + remainder) + name
+    return name
+
+
+def format_tabular_row(
+    row_number: int,
+    values: list[str],
+    headers: list[str],
+    header_score: int,
+) -> tuple[str, list[str], int]:
+    """Render cells with human-readable headers while retaining coordinates."""
+    nonempty = [value for value in values if value]
+    joined = " ".join(nonempty).casefold()
+    score = len(nonempty)
+    if any(hint in joined for hint in TABULAR_HEADER_HINTS):
+        score += 100
+    if len(re.findall(r"\b(?:19|20)\d{2}\b", joined)) >= 1 and len(nonempty) >= 2:
+        score += 50
+
+    is_better_header = row_number <= 12 and score > header_score
+    if is_better_header:
+        headers = list(values)
+        header_score = score
+        fields = [
+            f"{column_name(index)}列标题={value}"
+            for index, value in enumerate(values, start=1)
+            if value
+        ]
+        return (
+            f"第 {row_number} 行（列标题） | " + " | ".join(fields),
+            headers,
+            header_score,
+        )
+
+    fields = []
+    for index, value in enumerate(values, start=1):
+        if not value:
+            continue
+        coordinate = f"{column_name(index)}{row_number}"
+        header = headers[index - 1] if index <= len(headers) else ""
+        label = header or f"{column_name(index)}列"
+        fields.append(f"{label}（{coordinate}）={value}")
+    return f"第 {row_number} 行 | " + " | ".join(fields), headers, header_score
 
 
 def relevance_score(chunk: SourceChunk) -> int:
@@ -114,4 +183,3 @@ def trim_document(document: ParsedDocument, max_chars: int) -> ParsedDocument:
         f"{used:,} 字符。"
     )
     return ParsedDocument(selected, [*document.warnings, warning])
-

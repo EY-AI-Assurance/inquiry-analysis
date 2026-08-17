@@ -49,6 +49,19 @@ test("client includes report download and estimated progress controls", async ()
   assert.match(source, /import\("html2pdf\.js"\)/);
   assert.match(source, /\.from\(report\)\.save\(\)/);
   assert.match(source, /document\.fonts\.ready/);
+  assert.match(source, /sortQuestionsByPriority\(state\.result\.questions\)/);
+  assert.match(source, /拟答复策略/);
+  assert.match(source, /documentPreview/);
+  assert.match(source, /Python 后端版本未更新/);
+  assert.match(source, /results-split/);
+  assert.match(source, /parsePreviewBlocks/);
+  assert.match(source, /financial-table/);
+  assert.match(source, /formatPreviewValue/);
+  assert.match(source, /原始损益表/);
+  assert.match(source, /质询问题、依据与推荐解答/);
+  assert.match(source, /orientation: "landscape"/);
+  assert.match(source, /evidenceLocations/);
+  assert.match(source, /report-page/);
 });
 
 test("analyze route rejects non-multipart requests", async () => {

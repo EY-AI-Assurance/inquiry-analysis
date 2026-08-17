@@ -90,6 +90,15 @@ def test_success_response_matches_frontend_contract(monkeypatch):
     payload = response.json()
     assert payload["fileName"] == "report.csv"
     assert payload["reviewType"] == "SEC"
+    assert payload["documentPreview"] == [
+        {
+            "locator": "CSV 行 1–2",
+            "content": (
+                "第 1 行（列标题） | A列标题=项目 | B列标题=金额\n"
+                "第 2 行 | 项目（A2）=收入 | 金额（B2）=100"
+            ),
+        }
+    ]
     assert len(payload["questions"]) == 8
     assert payload["questions"][0]["evidence"][0]["source"] == "CSV 行 1–2"
     assert "sourceId" not in response.text

@@ -5,15 +5,14 @@ from io import StringIO
 
 from charset_normalizer import from_bytes
 
-from .common import CorruptDocumentError, EmptyDocumentError, ParsedDocument, SourceChunk, normalize_text
-
-
-def _column_name(index: int) -> str:
-    name = ""
-    while index:
-        index, remainder = divmod(index - 1, 26)
-        name = chr(65 + remainder) + name
-    return name
+from .common import (
+    CorruptDocumentError,
+    EmptyDocumentError,
+    ParsedDocument,
+    SourceChunk,
+    format_tabular_row,
+    normalize_text,
+)
 
 
 def parse_csv(data: bytes) -> ParsedDocument:
@@ -31,18 +30,18 @@ def parse_csv(data: bytes) -> ParsedDocument:
         batch_start = 1
         last_row = 0
         order = 0
+        headers: list[str] = []
+        header_score = 0
         for row_number, row in enumerate(rows, start=1):
             values = [normalize_text(value).replace("\n", " ") for value in row]
             if not any(values):
                 continue
-            fields = [
-                f"{_column_name(index)}={value}"
-                for index, value in enumerate(values, start=1)
-                if value
-            ]
+            line, headers, header_score = format_tabular_row(
+                row_number, values, headers, header_score
+            )
             if not batch:
                 batch_start = row_number
-            batch.append(f"第 {row_number} 行 | " + " | ".join(fields))
+            batch.append(line)
             last_row = row_number
             if len(batch) >= 30:
                 order += 1
@@ -71,4 +70,3 @@ def parse_csv(data: bytes) -> ParsedDocument:
     if not chunks:
         raise EmptyDocumentError("CSV 文件中没有可分析的数据。")
     return ParsedDocument(chunks=chunks, warnings=[])
-

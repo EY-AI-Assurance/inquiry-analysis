@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from parsers import SourceChunk
 from schemas import (
     AnalysisResponse,
+    DocumentPreviewSection,
     EvidenceDraft,
     EvidenceResponse,
     RegulatoryBasis,
@@ -529,5 +530,9 @@ def build_analysis_response(
     return AnalysisResponse(
         fileName=filename,
         warnings=warnings,
+        documentPreview=[
+            DocumentPreviewSection(locator=chunk.locator, content=chunk.content)
+            for chunk in chunks
+        ],
         questions=questions,
     )

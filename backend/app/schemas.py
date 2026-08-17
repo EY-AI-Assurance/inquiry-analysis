@@ -48,6 +48,11 @@ class EvidenceResponse(SchemaModel):
     observation: str
 
 
+class DocumentPreviewSection(SchemaModel):
+    locator: str
+    content: str
+
+
 class ReviewQuestionResponse(SchemaModel):
     id: str
     question: str
@@ -65,4 +70,5 @@ class AnalysisResponse(SchemaModel):
         default_factory=lambda: datetime.now(timezone.utc), alias="generatedAt"
     )
     warnings: list[str] = Field(default_factory=list)
+    document_preview: list[DocumentPreviewSection] = Field(alias="documentPreview")
     questions: list[ReviewQuestionResponse]

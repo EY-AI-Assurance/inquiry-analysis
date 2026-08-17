@@ -205,3 +205,24 @@ def test_source_mapping_rejects_ambiguous_row_label():
 
     assert invalid == {"行 1-30"}
     assert repaired == 0
+
+
+def test_analysis_response_includes_original_document_preview():
+    chunks = [
+        SourceChunk(
+            source_id="csv-rows-1-2",
+            locator="CSV 行 1–2",
+            content="项目 | 金额\n收入 | 100",
+            order=1,
+        )
+    ]
+
+    response = review_agent.build_analysis_response(
+        draft=review_agent._draft_from_text(json.dumps(valid_payload())),
+        chunks=chunks,
+        filename="report.csv",
+        warnings=[],
+    )
+
+    assert response.document_preview[0].locator == "CSV 行 1–2"
+    assert response.document_preview[0].content == "项目 | 金额\n收入 | 100"

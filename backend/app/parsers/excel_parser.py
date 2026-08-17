@@ -7,15 +7,14 @@ from typing import Iterable
 import openpyxl
 import xlrd
 
-from .common import CorruptDocumentError, EmptyDocumentError, ParsedDocument, SourceChunk, normalize_text
-
-
-def _column_name(index: int) -> str:
-    name = ""
-    while index:
-        index, remainder = divmod(index - 1, 26)
-        name = chr(65 + remainder) + name
-    return name
+from .common import (
+    CorruptDocumentError,
+    EmptyDocumentError,
+    ParsedDocument,
+    SourceChunk,
+    format_tabular_row,
+    normalize_text,
+)
 
 
 def _format_value(value: object) -> str:
@@ -35,6 +34,8 @@ def _sheet_chunks(
     batch_start = 1
     batch_end = 1
     order = starting_order
+    headers: list[str] = []
+    header_score = 0
 
     def flush() -> None:
         nonlocal batch, order
@@ -55,15 +56,13 @@ def _sheet_chunks(
         formatted = [_format_value(value) for value in values]
         if not any(formatted):
             continue
-        fields = [
-            f"{_column_name(index)}{row_number}={value}"
-            for index, value in enumerate(formatted, start=1)
-            if value
-        ]
+        line, headers, header_score = format_tabular_row(
+            row_number, formatted, headers, header_score
+        )
         if not batch:
             batch_start = row_number
         batch_end = row_number
-        batch.append(f"第 {row_number} 行 | " + " | ".join(fields))
+        batch.append(line)
         if len(batch) >= 30:
             flush()
     flush()
@@ -107,4 +106,3 @@ def parse_xls(data: bytes) -> ParsedDocument:
     if not chunks:
         raise EmptyDocumentError("Excel 文件中没有可分析的数据。")
     return ParsedDocument(chunks=chunks, warnings=[])
-

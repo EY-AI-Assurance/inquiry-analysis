@@ -18,7 +18,8 @@ def test_csv_parser_preserves_row_locations():
     )
     assert parsed.chunks[0].source_id == "csv-rows-1-3"
     assert parsed.chunks[0].locator == "CSV 行 1–3"
-    assert "经营利润" in parsed.chunks[0].content
+    assert "项目（A2）=收入" in parsed.chunks[0].content
+    assert "2025（B3）=80" in parsed.chunks[0].content
 
 
 def test_docx_parser_reads_paragraphs_and_tables():
@@ -48,7 +49,7 @@ def test_xlsx_parser_reads_sheet_cells():
 
     parsed = parse_document("report.xlsx", stream.getvalue())
     assert parsed.chunks[0].locator == "工作表“损益表”行 1–2"
-    assert "B2=-10" in parsed.chunks[0].content
+    assert "本期（B2）=-10" in parsed.chunks[0].content
 
 
 def test_legacy_xls_parser():
@@ -96,4 +97,3 @@ def test_large_document_is_trimmed_with_warning():
     parsed = parse_document("large.csv", "\n".join(rows).encode(), max_chars=8_000)
     assert sum(len(chunk.content) for chunk in parsed.chunks) <= 8_000
     assert parsed.warnings
-

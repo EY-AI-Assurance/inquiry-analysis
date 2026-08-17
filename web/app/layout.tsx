@@ -20,7 +20,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     title: "财务披露质询分析 | SEC Review Lab",
-    description: "从财务披露中生成有文件依据、规则依据和回答方向的 SEC 质询。",
+    description: "从财务披露中生成有文件依据、规则依据和拟答复策略的 SEC 质询。",
     images: [{ url: "/og.png", width: 1200, height: 630 }],
   },
   twitter: {

@@ -7,9 +7,9 @@
 1. 问题应互不重复，优先覆盖最可能触发监管关注的事项。
 2. `question` 应采用正式、直接的监管问询语气。
 3. 每项 `evidence.sourceId` 必须逐字使用文档来源中已有的短编号，例如 `S001`；不得输出 location、页码描述或组合多个编号。
-4. `evidence.observation` 说明文件中的具体触发事实。
+4. `evidence.observation` 说明文件中的具体触发事实；引用表格时优先使用实际列标题、项目名称和期间（例如“2025 年收入”），不要只写 A/B/C 等列字母。
 5. `regulatoryBasis` 说明适用规则及其与该事实的关联；不得编造条款。
-6. `answerDirections` 给出 2–4 个可核实、可准备材料的回答方向。
+6. `answerDirections` 给出 2–4 个可核实、可准备材料的拟答复策略。
 7. 全部内容使用中文，法规名称和必要的会计术语可以保留英文。
 8. 只输出 JSON，不要使用 Markdown 代码块。
 9. `priority` 只能是字符串 `high`、`medium` 或 `low`。
