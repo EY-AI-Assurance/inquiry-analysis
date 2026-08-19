@@ -42,6 +42,7 @@ configure_logging()
 from parsers import DocumentError, parse_document
 from review_agent import (
     AgentConfigurationError,
+    AgentTimeoutError,
     AgentTransportError,
     ModelOutputError,
     analyze_document,
@@ -66,6 +67,13 @@ def token_is_valid(received: str | None) -> bool:
     return bool(configured and received and secrets.compare_digest(configured, received))
 
 
+def environment_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
 @app.get("/health")
 def health():
     mode = os.getenv("ANALYSIS_MODE", "mock").strip().lower()
@@ -77,6 +85,9 @@ def health():
             or os.getenv("AGENTRUN_BASE_URL", "").strip()
         ),
         "agentRunModelName": os.getenv("AGENTRUN_MODEL_NAME", "").strip() or None,
+        "agentRunTimeoutSeconds": environment_float(
+            "AGENTRUN_TIMEOUT_SECONDS", 600
+        ),
         "agentRunOutputLogging": os.getenv("AGENTRUN_LOG_OUTPUT", "false")
         .strip()
         .lower()
@@ -223,6 +234,18 @@ async def analyze(
             time.perf_counter() - started_at,
         )
         return error_response(503, "AGENTRUN_NOT_CONFIGURED", str(exc))
+    except AgentTimeoutError as exc:
+        logger.warning(
+            "[%s] Agent Run 分析超时 | %s | 总耗时=%.2fs",
+            request_id,
+            exc,
+            time.perf_counter() - started_at,
+        )
+        return error_response(
+            504,
+            "AGENTRUN_TIMEOUT",
+            "云端分析在设定时间内尚未完成。请稍后重试；如文件较长，可继续提高后端分析超时。",
+        )
     except AgentTransportError as exc:
         logger.warning(
             "[%s] Agent Run 请求失败 | %s | 总耗时=%.2fs",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -32,6 +33,10 @@ class AgentConfigurationError(RuntimeError):
 
 
 class AgentTransportError(RuntimeError):
+    pass
+
+
+class AgentTimeoutError(AgentTransportError):
     pass
 
 
@@ -211,31 +216,76 @@ async def _invoke_agentrun(messages: list[dict[str, str]]) -> str:
         )
 
     try:
-        timeout_seconds = float(os.getenv("AGENTRUN_TIMEOUT_SECONDS", "180"))
+        timeout_seconds = float(os.getenv("AGENTRUN_TIMEOUT_SECONDS", "600"))
     except ValueError as exc:
         raise AgentConfigurationError(
             "AGENTRUN_TIMEOUT_SECONDS 必须是有效数字。"
         ) from exc
+    if not 30 <= timeout_seconds <= 3_600:
+        raise AgentConfigurationError(
+            "AGENTRUN_TIMEOUT_SECONDS 必须在 30 到 3600 秒之间。"
+        )
+    try:
+        connect_timeout_seconds = float(
+            os.getenv("AGENTRUN_CONNECT_TIMEOUT_SECONDS", "20")
+        )
+    except ValueError as exc:
+        raise AgentConfigurationError(
+            "AGENTRUN_CONNECT_TIMEOUT_SECONDS 必须是有效数字。"
+        ) from exc
+    if not 1 <= connect_timeout_seconds <= 120:
+        raise AgentConfigurationError(
+            "AGENTRUN_CONNECT_TIMEOUT_SECONDS 必须在 1 到 120 秒之间。"
+        )
     endpoint = _chat_url()
     request_payload = _agentrun_request_payload(messages)
     started_at = time.perf_counter()
     logger.info(
         "Agent Run 请求开始 | endpoint=%s | 模型=%s | 消息=%d | 输入字符=%d | "
-        "联网搜索=%s | 超时=%.1fs",
+        "联网搜索=%s | 连接超时=%.1fs | 分析超时=%.1fs",
         _safe_endpoint_for_log(endpoint),
         request_payload["model"],
         len(messages),
         sum(len(message.get("content", "")) for message in messages),
         request_payload["enable_search"],
+        connect_timeout_seconds,
         timeout_seconds,
     )
+
+    async def log_waiting_progress() -> None:
+        while True:
+            await asyncio.sleep(30)
+            logger.info(
+                "Agent Run 仍在处理中 | 已等待=%.0fs | 最大等待=%.0fs",
+                time.perf_counter() - started_at,
+                timeout_seconds,
+            )
+
+    heartbeat = asyncio.create_task(log_waiting_progress())
     try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        request_timeout = httpx.Timeout(
+            timeout_seconds,
+            connect=connect_timeout_seconds,
+        )
+        async with httpx.AsyncClient(timeout=request_timeout) as client:
             response = await client.post(
                 endpoint,
                 headers=headers,
                 json=request_payload,
             )
+    except httpx.TimeoutException as exc:
+        elapsed = time.perf_counter() - started_at
+        logger.warning(
+            "Agent Run 分析超时 | endpoint=%s | 已等待=%.2fs | 最大等待=%.1fs | 类型=%s",
+            _safe_endpoint_for_log(endpoint),
+            elapsed,
+            timeout_seconds,
+            type(exc).__name__,
+        )
+        raise AgentTimeoutError(
+            f"Agent Run 在 {timeout_seconds:.0f} 秒内未完成分析。"
+            "请求已停止等待，但云端任务此前可能仍在运行。"
+        ) from exc
     except httpx.HTTPError as exc:
         logger.warning(
             "Agent Run 连接异常 | endpoint=%s | 耗时=%.2fs | 错误=%s",
@@ -244,6 +294,12 @@ async def _invoke_agentrun(messages: list[dict[str, str]]) -> str:
             exc,
         )
         raise AgentTransportError(f"无法连接 Agent Run：{exc}") from exc
+    finally:
+        heartbeat.cancel()
+        try:
+            await heartbeat
+        except asyncio.CancelledError:
+            pass
 
     logger.info(
         "Agent Run HTTP 响应 | status=%d | 响应大小=%d bytes | 耗时=%.2fs",
@@ -510,8 +566,39 @@ def _source_ids_for_log(values: set[str]) -> list[str]:
     return [re.sub(r"[\r\n\t]+", " ", value)[:160] for value in sorted(values)]
 
 
+def _source_references(chunk: SourceChunk) -> set[str]:
+    references = set(
+        re.findall(r"（([A-Z]+\d+|T\d+:R\d+:C\d+)）=", chunk.content)
+    )
+    references.update(re.findall(r"^\[(P\d+)\]", chunk.content, flags=re.MULTILINE))
+    return references
+
+
+def _invalid_evidence_references(
+    draft: ReviewDraft, chunks: list[SourceChunk]
+) -> set[str]:
+    chunks_by_id = {chunk.source_id: chunk for chunk in chunks}
+    invalid: set[str] = set()
+    for question in draft.questions:
+        for evidence in question.evidence:
+            chunk = chunks_by_id.get(evidence.source_id)
+            if chunk is None:
+                continue
+            available = _source_references(chunk)
+            normalized = [reference.strip().upper() for reference in evidence.references]
+            evidence.references = list(dict.fromkeys(normalized))
+            if available and not evidence.references:
+                invalid.add(f"{evidence.source_id}:<缺少 references>")
+                continue
+            for reference in evidence.references:
+                if reference not in available:
+                    invalid.add(f"{evidence.source_id}:{reference}")
+    return invalid
+
+
 def _mock_draft(chunks: list[SourceChunk]) -> ReviewDraft:
     source_id = chunks[0].source_id
+    references = sorted(_source_references(chunks[0]))[:2]
     templates = [
         ("法定指标突出程度", "请说明法定 GAAP/IFRS 指标与非 GAAP 指标在本披露中的展示顺序和突出程度。", "high"),
         ("指标定义", "请完整定义披露中的非 GAAP 指标，并说明各调整项目是否在所有期间保持一致。", "high"),
@@ -534,6 +621,7 @@ def _mock_draft(chunks: list[SourceChunk]) -> ReviewDraft:
                 evidence=[
                     EvidenceDraft(
                         sourceId=source_id,
+                        references=references,
                         observation=f"本地 Mock 结果：已读取上传文件的第一个可用来源，用于验证问题 {question} 的展示流程。",
                     )
                 ],
@@ -615,7 +703,10 @@ async def analyze_document(chunks: list[SourceChunk], filename: str) -> ReviewDr
                     "已将 %d 个模型来源位置映射为内部 sourceId。",
                     repaired,
                 )
-            if not invalid:
+            invalid_references = (
+                set() if invalid else _invalid_evidence_references(draft, chunks)
+            )
+            if not invalid and not invalid_references:
                 priority_counts = {"high": 0, "medium": 0, "low": 0}
                 for question in draft.questions:
                     priority_counts[question.priority] += 1
@@ -637,20 +728,34 @@ async def analyze_document(chunks: list[SourceChunk], filename: str) -> ReviewDr
                         question_text,
                     )
                 return draft
-            logger.warning(
-                "Agent Run 第 %d 次输出包含无法映射的 sourceId | %s",
-                attempt + 1,
-                _source_ids_for_log(invalid),
-            )
+            if invalid:
+                logger.warning(
+                    "Agent Run 第 %d 次输出包含无法映射的 sourceId | %s",
+                    attempt + 1,
+                    _source_ids_for_log(invalid),
+                )
+            if invalid_references:
+                logger.warning(
+                    "Agent Run 第 %d 次输出包含无效或缺失的精确锚点 | %s",
+                    attempt + 1,
+                    _source_ids_for_log(invalid_references),
+                )
             if attempt == 1:
-                raise ModelOutputError("模型两次返回了无法映射到原文件的依据。")
-            feedback = (
-                "以下 sourceId 不存在："
-                + "、".join(sorted(invalid))
-                + "。允许的 sourceId 只有："
-                + "、".join(allowed_for_model)
-            )
-            logger.info("将来源映射反馈发送给 Agent Run 进行一次修复。")
+                raise ModelOutputError("模型两次返回了无法精确映射到原文件的依据。")
+            if invalid:
+                feedback = (
+                    "以下 sourceId 不存在："
+                    + "、".join(sorted(invalid))
+                    + "。允许的 sourceId 只有："
+                    + "、".join(allowed_for_model)
+                )
+            else:
+                feedback = (
+                    "以下 evidence.references 不存在或在有锚点的来源中缺失："
+                    + "、".join(sorted(invalid_references))
+                    + "。references 必须逐字复制对应 source content 中括号标出的坐标。"
+                )
+            logger.info("将来源或精确锚点反馈发送给 Agent Run 进行一次修复。")
 
         messages.extend(
             [
@@ -664,7 +769,7 @@ async def analyze_document(chunks: list[SourceChunk], filename: str) -> ReviewDr
                         "必须包含 8–12 个 questions；每个问题必须包含 question、"
                         "category、priority、evidence、regulatoryBasis 和 "
                         "answerDirections；priority 只能是 high、medium、low；"
-                        "sourceId 只能逐字使用文档提供的值。"
+                        "sourceId 和 references 只能逐字使用文档提供的值。"
                     ),
                 },
             ]
@@ -692,6 +797,7 @@ def build_analysis_response(
                 evidence=[
                     EvidenceResponse(
                         source=locations[evidence.source_id],
+                        references=evidence.references,
                         observation=evidence.observation,
                     )
                     for evidence in question.evidence

@@ -18,6 +18,15 @@ class EvidenceDraft(SchemaModel):
             "必须逐字复制 document.sources[].sourceId；不得使用 location、页码描述或自创编号。"
         ),
     )
+    references: list[str] = Field(
+        default_factory=list,
+        max_length=8,
+        description=(
+            "逐字复制对应来源 content 中与事实直接相关的精确锚点；"
+            "例如 Excel/CSV 单元格 A13、Word 段落 P5、Word 表格单元格 T1:R2:C3。"
+            "来源没有锚点时返回空数组。"
+        ),
+    )
     observation: str = Field(min_length=1)
 
 
@@ -45,6 +54,7 @@ class ReviewDraft(SchemaModel):
 
 class EvidenceResponse(SchemaModel):
     source: str
+    references: list[str] = Field(default_factory=list)
     observation: str
 
 

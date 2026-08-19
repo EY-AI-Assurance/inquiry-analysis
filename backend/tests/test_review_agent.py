@@ -18,6 +18,7 @@ def valid_payload(source_id: str = "csv-rows-1-2") -> dict:
                 "evidence": [
                     {
                         "sourceId": source_id,
+                        "references": [],
                         "observation": "文件展示了 Adjusted EBITDA。",
                     }
                 ],
@@ -132,6 +133,39 @@ def test_agent_output_logging_can_be_enabled(monkeypatch, caplog):
     assert "Agent Run 原始输出 END" in caplog.text
 
 
+def test_agentrun_read_timeout_has_a_distinct_error(monkeypatch):
+    class TimeoutClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def post(self, endpoint, headers, json):
+            raise review_agent.httpx.ReadTimeout("model is still running")
+
+    monkeypatch.setenv("AGENTRUN_CHAT_COMPLETIONS_URL", "https://example.com/chat")
+    monkeypatch.setenv("AGENTRUN_MODEL_NAME", "qwen3.7-plus")
+    monkeypatch.setenv("AGENTRUN_TIMEOUT_SECONDS", "600")
+    monkeypatch.setenv("AGENTRUN_CONNECT_TIMEOUT_SECONDS", "20")
+    monkeypatch.setattr(
+        review_agent.httpx,
+        "AsyncClient",
+        lambda timeout: TimeoutClient(),
+    )
+
+    try:
+        asyncio.run(
+            review_agent._invoke_agentrun(
+                [{"role": "user", "content": "analyze this document"}]
+            )
+        )
+    except review_agent.AgentTimeoutError as exc:
+        assert "600 秒" in str(exc)
+    else:
+        raise AssertionError("read timeout must raise AgentTimeoutError")
+
+
 def test_analyze_retries_after_schema_validation_error(monkeypatch, caplog):
     responses = [
         json.dumps({"questions": []}),
@@ -191,6 +225,38 @@ def test_analyze_retries_invalid_source_id(monkeypatch):
 
     draft = asyncio.run(review_agent.analyze_document(chunks, "report.csv"))
     assert draft.questions[0].evidence[0].source_id == "csv-rows-1-2"
+
+
+def test_analyze_retries_invalid_precise_reference(monkeypatch):
+    invalid = valid_payload()
+    repaired = valid_payload()
+    for question in invalid["questions"]:
+        question["evidence"][0]["references"] = ["Z99"]
+    for question in repaired["questions"]:
+        question["evidence"][0]["references"] = ["A2", "B2"]
+    responses = [json.dumps(invalid), json.dumps(repaired)]
+    received_messages: list[list[dict[str, str]]] = []
+
+    async def fake_invoke(messages):
+        received_messages.append([dict(message) for message in messages])
+        return responses.pop(0)
+
+    monkeypatch.setenv("ANALYSIS_MODE", "agentrun")
+    monkeypatch.setattr(review_agent, "_invoke_agentrun", fake_invoke)
+    chunks = [
+        SourceChunk(
+            source_id="csv-rows-1-2",
+            locator="CSV 行 1–2",
+            content="第 2 行 | 项目（A2）=收入 | 金额（B2）=100",
+            order=1,
+        )
+    ]
+
+    draft = asyncio.run(review_agent.analyze_document(chunks, "report.csv"))
+
+    assert len(received_messages) == 2
+    assert "references" in received_messages[1][-1]["content"]
+    assert draft.questions[0].evidence[0].references == ["A2", "B2"]
 
 
 def test_analyze_maps_pdf_location_label_without_retry(monkeypatch):
@@ -266,6 +332,44 @@ def test_source_mapping_rejects_ambiguous_row_label():
     assert repaired == 0
 
 
+def test_evidence_references_are_checked_against_source_content():
+    payload = valid_payload(source_id="sheet-1-rows-1-2")
+    for question in payload["questions"]:
+        question["evidence"][0]["references"] = ["A2", "Z99"]
+    draft = review_agent._draft_from_text(json.dumps(payload))
+    chunks = [
+        SourceChunk(
+            source_id="sheet-1-rows-1-2",
+            locator="工作表“利润表”行 1–2",
+            content=(
+                "第 1 行（列标题） | A列标题（A1）=项目 | B列标题（B1）=金额\n"
+                "第 2 行 | 项目（A2）=收入 | 金额（B2）=100"
+            ),
+            order=1,
+        )
+    ]
+
+    invalid = review_agent._invalid_evidence_references(draft, chunks)
+
+    assert invalid == {"sheet-1-rows-1-2:Z99"}
+
+
+def test_evidence_requires_references_when_source_has_precise_anchors():
+    draft = review_agent._draft_from_text(json.dumps(valid_payload()))
+    chunks = [
+        SourceChunk(
+            source_id="csv-rows-1-2",
+            locator="CSV 行 1–2",
+            content="第 2 行 | 项目（A2）=收入 | 金额（B2）=100",
+            order=1,
+        )
+    ]
+
+    invalid = review_agent._invalid_evidence_references(draft, chunks)
+
+    assert invalid == {"csv-rows-1-2:<缺少 references>"}
+
+
 def test_analysis_response_includes_original_document_preview():
     chunks = [
         SourceChunk(
@@ -285,3 +389,4 @@ def test_analysis_response_includes_original_document_preview():
 
     assert response.document_preview[0].locator == "CSV 行 1–2"
     assert response.document_preview[0].content == "项目 | 金额\n收入 | 100"
+    assert response.questions[0].evidence[0].references == []

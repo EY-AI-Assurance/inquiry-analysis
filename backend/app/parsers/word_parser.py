@@ -9,6 +9,7 @@ from .common import (
     EmptyDocumentError,
     ParsedDocument,
     SourceChunk,
+    column_name,
     normalize_text,
 )
 
@@ -44,17 +45,22 @@ def parse_docx(data: bytes) -> ParsedDocument:
     for index, paragraph in enumerate(document.paragraphs, start=1):
         value = normalize_text(paragraph.text)
         if value:
-            paragraph_buffer.append(value)
+            paragraph_buffer.append(f"[P{index}] {value}")
         if len(paragraph_buffer) >= 20 or sum(map(len, paragraph_buffer)) >= 4_000:
             flush_paragraphs(index)
     flush_paragraphs(len(document.paragraphs))
 
     for table_index, table in enumerate(document.tables, start=1):
         lines = []
-        for row in table.rows:
+        for row_index, row in enumerate(table.rows, start=1):
             cells = [normalize_text(cell.text).replace("\n", " ") for cell in row.cells]
             if any(cells):
-                lines.append(" | ".join(cells))
+                fields = [
+                    f"{column_name(column_index)}（T{table_index}:R{row_index}:C{column_index}）={value}"
+                    for column_index, value in enumerate(cells, start=1)
+                    if value
+                ]
+                lines.append(f"第 {row_index} 行 | " + " | ".join(fields))
         if lines:
             order += 1
             chunks.append(
@@ -69,4 +75,3 @@ def parse_docx(data: bytes) -> ParsedDocument:
     if not chunks:
         raise EmptyDocumentError("Word 文件中没有可分析的文本或表格。")
     return ParsedDocument(chunks=chunks, warnings=[])
-

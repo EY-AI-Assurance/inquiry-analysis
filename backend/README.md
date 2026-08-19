@@ -46,6 +46,10 @@ AGENTRUN_LOG_OUTPUT_MAX_CHARS=30000
 完整输出会显示在 `Agent Run 原始输出 BEGIN/END` 标记之间。它可能包含从上传文件衍生的财务信息，因此共享或生产环境建议将
 `AGENTRUN_LOG_OUTPUT=false`，仅保留阶段日志与问题摘要。需要查看解析后的来源位置时，可以临时使用 `LOG_LEVEL=DEBUG`。
 
+长文件默认允许 Agent Run 分析 600 秒，并每 30 秒输出一次仍在处理的心跳日志。`AGENTRUN_CONNECT_TIMEOUT_SECONDS`
+只限制与 endpoint 建立连接的时间，不会缩短模型生成时间。网站代理的 `BACKEND_ANALYSIS_TIMEOUT_SECONDS` 应始终比
+`AGENTRUN_TIMEOUT_SECONDS` 多留至少 30–60 秒，默认配置为 660 秒。
+
 ## 修改审查规则
 
 - SEC Skill：`skills/sec-review.md`

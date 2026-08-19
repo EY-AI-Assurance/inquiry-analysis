@@ -127,7 +127,7 @@ def format_tabular_row(
         headers = list(values)
         header_score = score
         fields = [
-            f"{column_name(index)}列标题={value}"
+            f"{column_name(index)}列标题（{column_name(index)}{row_number}）={value}"
             for index, value in enumerate(values, start=1)
             if value
         ]

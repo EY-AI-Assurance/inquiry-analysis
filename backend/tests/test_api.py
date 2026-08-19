@@ -5,6 +5,7 @@ import logging
 from fastapi.testclient import TestClient
 
 import main
+from review_agent import AgentTimeoutError
 from schemas import EvidenceDraft, RegulatoryBasis, ReviewDraft, ReviewQuestionDraft
 
 
@@ -22,6 +23,7 @@ def fake_draft() -> ReviewDraft:
                 evidence=[
                     EvidenceDraft(
                         source_id="csv-rows-1-2",
+                        references=["A2", "B2"],
                         observation="文件展示了 Adjusted EBITDA。",
                     )
                 ],
@@ -41,10 +43,12 @@ def test_health_does_not_expose_secrets(monkeypatch):
     monkeypatch.setenv("BACKEND_APP_TOKEN", "super-secret")
     monkeypatch.setenv("AGENTRUN_MODEL_NAME", "qwen3.7-plus")
     monkeypatch.setenv("AGENTRUN_LOG_OUTPUT", "true")
+    monkeypatch.setenv("AGENTRUN_TIMEOUT_SECONDS", "600")
     response = client.get("/health")
     assert response.status_code == 200
     assert "super-secret" not in response.text
     assert response.json()["agentRunModelName"] == "qwen3.7-plus"
+    assert response.json()["agentRunTimeoutSeconds"] == 600
     assert response.json()["agentRunOutputLogging"] is True
     assert response.json()["sourceIdProtocol"] == "short-v1"
 
@@ -102,13 +106,14 @@ def test_success_response_matches_frontend_contract(monkeypatch, caplog):
         {
             "locator": "CSV 行 1–2",
             "content": (
-                "第 1 行（列标题） | A列标题=项目 | B列标题=金额\n"
+                "第 1 行（列标题） | A列标题（A1）=项目 | B列标题（B1）=金额\n"
                 "第 2 行 | 项目（A2）=收入 | 金额（B2）=100"
             ),
         }
     ]
     assert len(payload["questions"]) == 8
     assert payload["questions"][0]["evidence"][0]["source"] == "CSV 行 1–2"
+    assert payload["questions"][0]["evidence"][0]["references"] == ["A2", "B2"]
     assert "sourceId" not in response.text
     assert "阶段 1/8：收到分析请求" in caplog.text
     assert "阶段 2/8：文件读取完成" in caplog.text
@@ -120,3 +125,22 @@ def test_success_response_matches_frontend_contract(monkeypatch, caplog):
     assert "阶段 6/8：开始构造前端响应" in caplog.text
     assert "阶段 7/8：响应数据构造完成" in caplog.text
     assert "阶段 8/8：分析结束" in caplog.text
+
+
+def test_agent_timeout_returns_distinct_gateway_timeout(monkeypatch):
+    monkeypatch.setenv("BACKEND_APP_TOKEN", "test-token")
+    monkeypatch.setenv("ANALYSIS_MODE", "agentrun")
+
+    async def fake_analyze_document(chunks, filename):
+        raise AgentTimeoutError("Agent Run 在 600 秒内未完成分析。")
+
+    monkeypatch.setattr(main, "analyze_document", fake_analyze_document)
+    response = client.post(
+        "/analyze",
+        data={"reviewType": "SEC"},
+        files={"file": ("report.csv", "项目,金额\n收入,100\n".encode(), "text/csv")},
+        headers={"X-App-Token": "test-token"},
+    )
+
+    assert response.status_code == 504
+    assert response.json()["error"]["code"] == "AGENTRUN_TIMEOUT"

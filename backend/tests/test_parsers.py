@@ -35,7 +35,9 @@ def test_docx_parser_reads_paragraphs_and_tables():
 
     parsed = parse_document("report.docx", stream.getvalue())
     assert len(parsed.chunks) == 2
+    assert parsed.chunks[0].content.startswith("[P1] 2025 年收入增长 20%")
     assert parsed.chunks[1].locator == "Word 表格 1"
+    assert "T1:R2:C1" in parsed.chunks[1].content
 
 
 def test_xlsx_parser_reads_sheet_cells():
@@ -49,6 +51,7 @@ def test_xlsx_parser_reads_sheet_cells():
 
     parsed = parse_document("report.xlsx", stream.getvalue())
     assert parsed.chunks[0].locator == "工作表“损益表”行 1–2"
+    assert "A1" in parsed.chunks[0].content
     assert "本期（B2）=-10" in parsed.chunks[0].content
 
 
