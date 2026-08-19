@@ -3,10 +3,21 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import FastAPI, File, Form, Header, UploadFile
 from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
+
+
+# Load the backend's local configuration before importing modules that read
+# environment variables. The local .env is authoritative when it exists, which
+# prevents values exported by an older development session from selecting a
+# stale Agent Run endpoint. Deployed environments do not include this file and
+# continue to use variables injected by the hosting platform.
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(BACKEND_DIR / ".env", override=True)
 
 from parsers import DocumentError, parse_document
 from review_agent import (
@@ -45,6 +56,7 @@ def health():
             os.getenv("AGENTRUN_CHAT_COMPLETIONS_URL", "").strip()
             or os.getenv("AGENTRUN_BASE_URL", "").strip()
         ),
+        "agentRunModelName": os.getenv("AGENTRUN_MODEL_NAME", "").strip() or None,
         "appTokenConfigured": bool(os.getenv("BACKEND_APP_TOKEN", "")),
         "supportedMarkets": ["SEC"],
         "sourceIdProtocol": "short-v1",

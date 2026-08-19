@@ -128,6 +128,32 @@ def _content_from_response(payload: Any) -> str:
     raise ModelOutputError("Agent Run 返回了无法识别的消息内容。")
 
 
+def _environment_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise AgentConfigurationError(f"{name} 必须是 true 或 false。")
+
+
+def _agentrun_request_payload(messages: list[dict[str, str]]) -> dict[str, Any]:
+    model_name = os.getenv("AGENTRUN_MODEL_NAME", "").strip()
+    if not model_name:
+        raise AgentConfigurationError(
+            "ANALYSIS_MODE=agentrun 时必须配置 AGENTRUN_MODEL_NAME。"
+        )
+    return {
+        "model": model_name,
+        "messages": messages,
+        "stream": False,
+        "enable_search": _environment_flag("AGENTRUN_ENABLE_SEARCH", True),
+    }
+
+
 async def _invoke_agentrun(messages: list[dict[str, str]]) -> str:
     headers = {"content-type": "application/json"}
     api_key = os.getenv("AGENTRUN_API_KEY", "").strip()
@@ -146,7 +172,7 @@ async def _invoke_agentrun(messages: list[dict[str, str]]) -> str:
             response = await client.post(
                 _chat_url(),
                 headers=headers,
-                json={"messages": messages, "stream": False},
+                json=_agentrun_request_payload(messages),
             )
     except httpx.HTTPError as exc:
         raise AgentTransportError(f"无法连接 Agent Run：{exc}") from exc

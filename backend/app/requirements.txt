@@ -8,3 +8,4 @@ openpyxl>=3.1.5,<4
 xlrd>=2.0.2,<3
 charset-normalizer>=3.4.2,<4
 pydantic>=2.11,<3
+python-dotenv>=1.0,<2

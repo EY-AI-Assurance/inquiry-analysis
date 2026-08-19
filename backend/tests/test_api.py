@@ -37,9 +37,11 @@ def fake_draft() -> ReviewDraft:
 
 def test_health_does_not_expose_secrets(monkeypatch):
     monkeypatch.setenv("BACKEND_APP_TOKEN", "super-secret")
+    monkeypatch.setenv("AGENTRUN_MODEL_NAME", "qwen3.7-plus")
     response = client.get("/health")
     assert response.status_code == 200
     assert "super-secret" not in response.text
+    assert response.json()["agentRunModelName"] == "qwen3.7-plus"
     assert response.json()["sourceIdProtocol"] == "short-v1"
 
 

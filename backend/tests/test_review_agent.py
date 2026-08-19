@@ -82,6 +82,33 @@ def test_runtime_uses_short_source_ids_for_model():
     ]
 
 
+def test_agentrun_payload_sends_explicit_model_and_search(monkeypatch):
+    monkeypatch.setenv("AGENTRUN_MODEL_NAME", "qwen3.7-plus")
+    monkeypatch.setenv("AGENTRUN_ENABLE_SEARCH", "true")
+
+    payload = review_agent._agentrun_request_payload(
+        [{"role": "user", "content": "test"}]
+    )
+
+    assert payload == {
+        "model": "qwen3.7-plus",
+        "messages": [{"role": "user", "content": "test"}],
+        "stream": False,
+        "enable_search": True,
+    }
+
+
+def test_agentrun_payload_requires_model(monkeypatch):
+    monkeypatch.delenv("AGENTRUN_MODEL_NAME", raising=False)
+
+    try:
+        review_agent._agentrun_request_payload([])
+    except review_agent.AgentConfigurationError as exc:
+        assert "AGENTRUN_MODEL_NAME" in str(exc)
+    else:
+        raise AssertionError("missing AGENTRUN_MODEL_NAME must fail")
+
+
 def test_analyze_retries_after_schema_validation_error(monkeypatch):
     responses = [
         json.dumps({"questions": []}),

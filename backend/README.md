@@ -13,9 +13,12 @@
 
 ```bash
 conda activate inquiry-analysis
-set -a && source .env && set +a
 python app/main.py
 ```
+
+`app/main.py` 会自动读取本目录的 `.env`，并以该文件作为本地开发的配置来源，避免
+旧 Terminal 中残留的环境变量误连到已经删除的 Agent。线上部署不应携带 `.env`，而是
+使用部署平台注入的环境变量。
 
 默认地址为 `http://127.0.0.1:8001`。项目使用 8001 是为了避免与电脑上已有的旧开发服务占用 8000 端口发生冲突。
 
