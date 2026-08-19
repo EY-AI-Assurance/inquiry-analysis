@@ -4,10 +4,12 @@ import json
 import logging
 import os
 import re
+import time
 import unicodedata
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import ValidationError
@@ -140,6 +142,48 @@ def _environment_flag(name: str, default: bool = False) -> bool:
     raise AgentConfigurationError(f"{name} 必须是 true 或 false。")
 
 
+def _safe_endpoint_for_log(url: str) -> str:
+    """Return an endpoint description without credentials, query, or fragment."""
+    try:
+        parsed = urlsplit(url)
+        if not parsed.scheme or not parsed.hostname:
+            return "<已配置的 Agent Run endpoint>"
+        port = f":{parsed.port}" if parsed.port else ""
+        return f"{parsed.scheme}://{parsed.hostname}{port}{parsed.path}"
+    except ValueError:
+        return "<已配置的 Agent Run endpoint>"
+
+
+def _agent_output_log_limit() -> int:
+    raw_value = os.getenv("AGENTRUN_LOG_OUTPUT_MAX_CHARS", "30000").strip()
+    try:
+        value = int(raw_value)
+    except ValueError:
+        logger.warning(
+            "AGENTRUN_LOG_OUTPUT_MAX_CHARS=%r 无效，使用默认值 30000。",
+            raw_value,
+        )
+        return 30_000
+    return max(1_000, min(value, 200_000))
+
+
+def _log_agentrun_output(output: str) -> None:
+    if not _environment_flag("AGENTRUN_LOG_OUTPUT", False):
+        return
+    limit = _agent_output_log_limit()
+    if len(output) > limit:
+        rendered = output[:limit] + f"\n... [其余 {len(output) - limit} 个字符已截断]"
+    else:
+        rendered = output
+    logger.info(
+        "Agent Run 原始输出 BEGIN | 字符=%d | 日志上限=%d\n%s\n"
+        "Agent Run 原始输出 END",
+        len(output),
+        limit,
+        rendered,
+    )
+
+
 def _agentrun_request_payload(messages: list[dict[str, str]]) -> dict[str, Any]:
     model_name = os.getenv("AGENTRUN_MODEL_NAME", "").strip()
     if not model_name:
@@ -166,17 +210,47 @@ async def _invoke_agentrun(messages: list[dict[str, str]]) -> str:
             f"{auth_scheme} {api_key}" if auth_scheme else api_key
         )
 
-    timeout_seconds = float(os.getenv("AGENTRUN_TIMEOUT_SECONDS", "180"))
+    try:
+        timeout_seconds = float(os.getenv("AGENTRUN_TIMEOUT_SECONDS", "180"))
+    except ValueError as exc:
+        raise AgentConfigurationError(
+            "AGENTRUN_TIMEOUT_SECONDS 必须是有效数字。"
+        ) from exc
+    endpoint = _chat_url()
+    request_payload = _agentrun_request_payload(messages)
+    started_at = time.perf_counter()
+    logger.info(
+        "Agent Run 请求开始 | endpoint=%s | 模型=%s | 消息=%d | 输入字符=%d | "
+        "联网搜索=%s | 超时=%.1fs",
+        _safe_endpoint_for_log(endpoint),
+        request_payload["model"],
+        len(messages),
+        sum(len(message.get("content", "")) for message in messages),
+        request_payload["enable_search"],
+        timeout_seconds,
+    )
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
             response = await client.post(
-                _chat_url(),
+                endpoint,
                 headers=headers,
-                json=_agentrun_request_payload(messages),
+                json=request_payload,
             )
     except httpx.HTTPError as exc:
+        logger.warning(
+            "Agent Run 连接异常 | endpoint=%s | 耗时=%.2fs | 错误=%s",
+            _safe_endpoint_for_log(endpoint),
+            time.perf_counter() - started_at,
+            exc,
+        )
         raise AgentTransportError(f"无法连接 Agent Run：{exc}") from exc
 
+    logger.info(
+        "Agent Run HTTP 响应 | status=%d | 响应大小=%d bytes | 耗时=%.2fs",
+        response.status_code,
+        len(response.content),
+        time.perf_counter() - started_at,
+    )
     if response.status_code >= 400:
         detail = response.text[:500]
         raise AgentTransportError(
@@ -185,8 +259,24 @@ async def _invoke_agentrun(messages: list[dict[str, str]]) -> str:
     try:
         payload = response.json()
     except ValueError as exc:
+        _log_agentrun_output(response.text)
         raise ModelOutputError("Agent Run 返回的不是 JSON 响应。") from exc
-    return _content_from_response(payload)
+    try:
+        output = _content_from_response(payload)
+    except ModelOutputError:
+        _log_agentrun_output(json.dumps(payload, ensure_ascii=False, default=str))
+        raise
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    if isinstance(usage, dict):
+        logger.info(
+            "Agent Run token 用量 | prompt=%s | completion=%s | total=%s",
+            usage.get("prompt_tokens", "unknown"),
+            usage.get("completion_tokens", "unknown"),
+            usage.get("total_tokens", "unknown"),
+        )
+    logger.info("Agent Run 消息提取完成 | 输出字符=%d", len(output))
+    _log_agentrun_output(output)
+    return output
 
 
 def _json_value(text: str) -> Any:
@@ -463,36 +553,92 @@ def _mock_draft(chunks: list[SourceChunk]) -> ReviewDraft:
 
 
 async def analyze_document(chunks: list[SourceChunk], filename: str) -> ReviewDraft:
-    if _analysis_mode() == "mock":
+    mode = _analysis_mode()
+    logger.info(
+        "分析器启动 | 文件=%r | 模式=%s | 来源块=%d | 文档字符=%d",
+        filename,
+        mode,
+        len(chunks),
+        sum(len(chunk.content) for chunk in chunks),
+    )
+    if mode == "mock":
+        logger.info("使用 Mock 模式生成固定测试问题，不会调用 Agent Run。")
         return _mock_draft(chunks)
-    if _analysis_mode() != "agentrun":
+    if mode != "agentrun":
         raise AgentConfigurationError("ANALYSIS_MODE 只能是 mock 或 agentrun。")
 
     allowed_for_model = [
         f"{_model_source_id(index)}（{chunk.locator}）"
         for index, chunk in enumerate(chunks, start=1)
     ]
+    logger.info(
+        "开始组装 Agent Run 输入 | 来源块=%d | 允许的来源 ID=%d",
+        len(chunks),
+        len(allowed_for_model),
+    )
     messages = _runtime_messages(chunks, filename)
+    logger.info(
+        "Agent Run 输入组装完成 | messages=%d | system字符=%d | user字符=%d",
+        len(messages),
+        len(messages[0]["content"]),
+        len(messages[1]["content"]),
+    )
 
     for attempt in range(2):
+        logger.info(
+            "Agent Run 生成尝试 %d/2 | 消息=%d",
+            attempt + 1,
+            len(messages),
+        )
         raw_output = await _invoke_agentrun(messages)
+        logger.info(
+            "开始解析并校验 Agent Run 输出 | 尝试=%d | 输出字符=%d",
+            attempt + 1,
+            len(raw_output),
+        )
         try:
             draft = _draft_from_text(raw_output)
         except ModelOutputError as exc:
             if attempt == 1:
+                logger.error("Agent Run 第 2 次输出仍未通过校验 | %s", exc.repair_detail)
                 raise
             feedback = exc.repair_detail
+            logger.info("将校验反馈发送给 Agent Run 进行一次修复 | %s", feedback)
         else:
+            logger.info(
+                "Agent Run JSON/Schema 校验通过，开始核对来源引用 | 尝试=%d",
+                attempt + 1,
+            )
             invalid, repaired = _reconcile_source_ids(draft, chunks)
             if repaired:
                 logger.info(
-                    "Mapped %d model evidence location label(s) to sourceId.",
+                    "已将 %d 个模型来源位置映射为内部 sourceId。",
                     repaired,
                 )
             if not invalid:
+                priority_counts = {"high": 0, "medium": 0, "low": 0}
+                for question in draft.questions:
+                    priority_counts[question.priority] += 1
+                logger.info(
+                    "Agent Run 输出校验通过 | 尝试=%d | 问题=%d | 高=%d | 中=%d | 低=%d",
+                    attempt + 1,
+                    len(draft.questions),
+                    priority_counts["high"],
+                    priority_counts["medium"],
+                    priority_counts["low"],
+                )
+                for index, question in enumerate(draft.questions, start=1):
+                    question_text = re.sub(r"\s+", " ", question.question).strip()
+                    logger.info(
+                        "Agent Run 问题 %02d | %s | %s | %s",
+                        index,
+                        question.priority,
+                        question.category,
+                        question_text,
+                    )
                 return draft
             logger.warning(
-                "Agent Run returned unmapped sourceId values on attempt %d: %s",
+                "Agent Run 第 %d 次输出包含无法映射的 sourceId | %s",
                 attempt + 1,
                 _source_ids_for_log(invalid),
             )
@@ -504,6 +650,7 @@ async def analyze_document(chunks: list[SourceChunk], filename: str) -> ReviewDr
                 + "。允许的 sourceId 只有："
                 + "、".join(allowed_for_model)
             )
+            logger.info("将来源映射反馈发送给 Agent Run 进行一次修复。")
 
         messages.extend(
             [

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi.testclient import TestClient
 
 import main
@@ -38,10 +40,12 @@ def fake_draft() -> ReviewDraft:
 def test_health_does_not_expose_secrets(monkeypatch):
     monkeypatch.setenv("BACKEND_APP_TOKEN", "super-secret")
     monkeypatch.setenv("AGENTRUN_MODEL_NAME", "qwen3.7-plus")
+    monkeypatch.setenv("AGENTRUN_LOG_OUTPUT", "true")
     response = client.get("/health")
     assert response.status_code == 200
     assert "super-secret" not in response.text
     assert response.json()["agentRunModelName"] == "qwen3.7-plus"
+    assert response.json()["agentRunOutputLogging"] is True
     assert response.json()["sourceIdProtocol"] == "short-v1"
 
 
@@ -73,8 +77,10 @@ def test_hkex_is_an_explicit_placeholder(monkeypatch):
     assert "筹备中" in response.json()["error"]["message"]
 
 
-def test_success_response_matches_frontend_contract(monkeypatch):
+def test_success_response_matches_frontend_contract(monkeypatch, caplog):
     monkeypatch.setenv("BACKEND_APP_TOKEN", "test-token")
+    monkeypatch.setenv("ANALYSIS_MODE", "agentrun")
+    caplog.set_level(logging.INFO, logger="inquiry-analysis")
 
     async def fake_analyze_document(chunks, filename):
         assert filename == "report.csv"
@@ -104,3 +110,13 @@ def test_success_response_matches_frontend_contract(monkeypatch):
     assert len(payload["questions"]) == 8
     assert payload["questions"][0]["evidence"][0]["source"] == "CSV 行 1–2"
     assert "sourceId" not in response.text
+    assert "阶段 1/8：收到分析请求" in caplog.text
+    assert "阶段 2/8：文件读取完成" in caplog.text
+    assert "阶段 3/8：文档解析成功" in caplog.text
+    assert "解析器已选择" in caplog.text
+    assert "文档内容提取完成" in caplog.text
+    assert "阶段 4/8：文档解析结果已准备，开始 Agent Run" in caplog.text
+    assert "阶段 5/8：Agent Run 处理完成" in caplog.text
+    assert "阶段 6/8：开始构造前端响应" in caplog.text
+    assert "阶段 7/8：响应数据构造完成" in caplog.text
+    assert "阶段 8/8：分析结束" in caplog.text

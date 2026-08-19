@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 from parsers import SourceChunk
 import review_agent
@@ -109,7 +110,29 @@ def test_agentrun_payload_requires_model(monkeypatch):
         raise AssertionError("missing AGENTRUN_MODEL_NAME must fail")
 
 
-def test_analyze_retries_after_schema_validation_error(monkeypatch):
+def test_safe_endpoint_log_removes_credentials_and_query():
+    safe = review_agent._safe_endpoint_for_log(
+        "https://user:secret@example.com:8443/invoke/chat?token=hidden#fragment"
+    )
+
+    assert safe == "https://example.com:8443/invoke/chat"
+    assert "secret" not in safe
+    assert "hidden" not in safe
+
+
+def test_agent_output_logging_can_be_enabled(monkeypatch, caplog):
+    monkeypatch.setenv("AGENTRUN_LOG_OUTPUT", "true")
+    monkeypatch.setenv("AGENTRUN_LOG_OUTPUT_MAX_CHARS", "1000")
+    caplog.set_level(logging.INFO, logger="inquiry-analysis.review-agent")
+
+    review_agent._log_agentrun_output('{"questions":[{"question":"测试输出"}]}')
+
+    assert "Agent Run 原始输出 BEGIN" in caplog.text
+    assert "测试输出" in caplog.text
+    assert "Agent Run 原始输出 END" in caplog.text
+
+
+def test_analyze_retries_after_schema_validation_error(monkeypatch, caplog):
     responses = [
         json.dumps({"questions": []}),
         json.dumps(valid_payload()),
@@ -122,6 +145,7 @@ def test_analyze_retries_after_schema_validation_error(monkeypatch):
 
     monkeypatch.setenv("ANALYSIS_MODE", "agentrun")
     monkeypatch.setattr(review_agent, "_invoke_agentrun", fake_invoke)
+    caplog.set_level(logging.INFO, logger="inquiry-analysis.review-agent")
     chunks = [
         SourceChunk(
             source_id="csv-rows-1-2",
@@ -137,6 +161,14 @@ def test_analyze_retries_after_schema_validation_error(monkeypatch):
     assert len(received_messages) == 2
     assert received_messages[1][-2]["role"] == "assistant"
     assert "未通过服务端校验" in received_messages[1][-1]["content"]
+    assert "Agent Run 生成尝试 1/2" in caplog.text
+    assert "开始组装 Agent Run 输入" in caplog.text
+    assert "Agent Run 输入组装完成" in caplog.text
+    assert "开始解析并校验 Agent Run 输出" in caplog.text
+    assert "Agent Run JSON/Schema 校验通过" in caplog.text
+    assert "将校验反馈发送给 Agent Run" in caplog.text
+    assert "Agent Run 输出校验通过" in caplog.text
+    assert "Agent Run 问题 01" in caplog.text
 
 
 def test_analyze_retries_invalid_source_id(monkeypatch):
