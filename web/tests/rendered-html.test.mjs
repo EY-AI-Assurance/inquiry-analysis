@@ -67,6 +67,18 @@ test("client includes report download and estimated progress controls", async ()
   assert.match(source, /PDF_REPORT_WIDTH_PX = 1040/);
   assert.match(source, /evidenceLocations/);
   assert.match(source, /report-page/);
+  assert.match(source, /normalizedSourceLocator/);
+  assert.match(source, /sourceSectionRefs/);
+  assert.match(source, /sourceReferenceRefs/);
+  assert.match(source, /sourceReferenceKey/);
+  assert.match(source, /sourceRowKey/);
+  assert.match(source, /scrollContainer\.scrollTo/);
+  assert.match(source, /tableShell\.scrollTo/);
+  assert.match(source, /is-evidence-highlighted/);
+  assert.match(source, /is-reference-row-highlighted/);
+  assert.match(source, /onClick=\{\(\) => locateQuestion\(question\)\}/);
+  assert.match(source, /展开依据 \+/);
+  assert.match(source, /type: "TOGGLE_QUESTION"/);
 });
 
 test("analyze route rejects non-multipart requests", async () => {
@@ -95,4 +107,14 @@ test("analyze route reports missing backend configuration", async () => {
   assert.equal(response.status, 503);
   const body = await response.json();
   assert.equal(body.error.code, "BACKEND_NOT_CONFIGURED");
+});
+
+test("analyze proxy keeps a configurable long-document timeout", async () => {
+  const source = await readFile(
+    new URL("../app/api/analyze/route.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /DEFAULT_UPSTREAM_TIMEOUT_SECONDS = 660/);
+  assert.match(source, /BACKEND_ANALYSIS_TIMEOUT_SECONDS/);
+  assert.match(source, /云端分析此前可能仍在运行/);
 });

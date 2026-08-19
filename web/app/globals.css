@@ -865,6 +865,40 @@ a:focus-visible,
   border: 1px solid #d9d7ce;
   border-radius: 10px;
   background: #fff;
+  transition:
+    border-color 220ms ease,
+    box-shadow 220ms ease;
+}
+
+.source-preview-section.is-evidence-highlighted {
+  border-color: #c49a00;
+  box-shadow:
+    0 0 0 3px rgba(255, 215, 53, 0.48),
+    0 16px 36px rgba(113, 92, 0, 0.14);
+  animation: evidence-source-pulse 1.2s ease-out;
+}
+
+.source-preview-section.is-evidence-highlighted .source-section-heading {
+  background: #fff3ad;
+}
+
+@keyframes evidence-source-pulse {
+  0% {
+    box-shadow:
+      0 0 0 0 rgba(255, 215, 53, 0.9),
+      0 8px 20px rgba(113, 92, 0, 0.08);
+  }
+  55% {
+    box-shadow:
+      0 0 0 6px rgba(255, 215, 53, 0.38),
+      0 16px 36px rgba(113, 92, 0, 0.14);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .source-preview-section.is-evidence-highlighted {
+    animation: none;
+  }
 }
 
 .source-preview-section:last-child {
@@ -974,6 +1008,27 @@ a:focus-visible,
   color: #a5322c;
 }
 
+.financial-table tr.is-reference-row-highlighted th,
+.financial-table tr.is-reference-row-highlighted td {
+  position: relative;
+  z-index: 3;
+  background: #ffe66c;
+  color: var(--ink);
+  box-shadow: inset 0 0 0 2px #b88f00;
+  animation: evidence-cell-pulse 900ms ease-out;
+}
+
+@keyframes evidence-cell-pulse {
+  0% {
+    background: #fff;
+    box-shadow: inset 0 0 0 0 rgba(184, 143, 0, 0);
+  }
+  60% {
+    background: #fff0a3;
+    box-shadow: inset 0 0 0 3px #c49a00;
+  }
+}
+
 .financial-table th:last-child,
 .financial-table td:last-child {
   border-right: 0;
@@ -993,6 +1048,14 @@ a:focus-visible,
 
 .source-text-block p {
   margin: 0 0 8px;
+  padding: 4px 6px;
+  border-radius: 5px;
+}
+
+.source-text-block p.is-reference-highlighted {
+  background: #fff0a3;
+  box-shadow: inset 3px 0 0 #c49a00;
+  animation: evidence-cell-pulse 900ms ease-out;
 }
 
 .source-text-block p:last-child {
@@ -1021,9 +1084,21 @@ a:focus-visible,
   box-shadow: 0 12px 36px rgba(25, 25, 22, 0.055);
 }
 
-.question-toggle {
+.question-card.is-selected {
+  border-color: #c49a00;
+  box-shadow: 0 0 0 2px rgba(255, 215, 53, 0.38);
+}
+
+.question-card-header {
   display: grid;
-  grid-template-columns: 50px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 104px;
+  align-items: stretch;
+  background: #fff;
+}
+
+.question-locate {
+  display: grid;
+  grid-template-columns: 50px minmax(0, 1fr);
   gap: 18px;
   align-items: start;
   width: 100%;
@@ -1033,6 +1108,10 @@ a:focus-visible,
   background: #fff;
   color: inherit;
   text-align: left;
+}
+
+.question-locate:hover {
+  background: #fffdf3;
 }
 
 .question-index {
@@ -1091,11 +1170,20 @@ a:focus-visible,
 }
 
 .expand-control {
-  align-self: center;
+  cursor: pointer;
+  padding: 12px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: #f7f6f1;
   color: #716f67;
   font-size: 11px;
   font-weight: 750;
   white-space: nowrap;
+}
+
+.expand-control:hover {
+  background: #fff3ad;
+  color: #5e4b00;
 }
 
 .question-details {
@@ -1139,6 +1227,24 @@ a:focus-visible,
   font-weight: 750;
 }
 
+.evidence-references {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.evidence-references span {
+  padding: 3px 6px;
+  border: 1px solid #dfc34e;
+  border-radius: 5px;
+  background: #fff7cc;
+  color: #665200;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  font-weight: 750;
+}
+
 .evidence-item p,
 .basis-item p {
   margin: 6px 0 0;
@@ -1176,6 +1282,14 @@ a:focus-visible,
   color: #d2d0c8;
   font-size: 12px;
   line-height: 1.65;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .financial-table tr.is-reference-row-highlighted th,
+  .financial-table tr.is-reference-row-highlighted td,
+  .source-text-block p.is-reference-highlighted {
+    animation: none;
+  }
 }
 
 footer {
@@ -1320,15 +1434,21 @@ footer p {
     border-bottom: 1px solid var(--line);
   }
 
-  .question-toggle {
+  .question-card-header {
+    grid-template-columns: 1fr;
+  }
+
+  .question-locate {
     grid-template-columns: 42px 1fr;
     gap: 13px;
     padding: 18px;
   }
 
   .expand-control {
-    grid-column: 2;
-    justify-self: start;
+    padding: 11px 18px;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+    text-align: left;
   }
 
   .question-details {

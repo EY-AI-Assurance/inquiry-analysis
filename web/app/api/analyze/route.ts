@@ -1,6 +1,17 @@
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
 const MULTIPART_OVERHEAD_BYTES = 1024 * 1024;
-const UPSTREAM_TIMEOUT_MS = 180_000;
+const DEFAULT_UPSTREAM_TIMEOUT_SECONDS = 660;
+
+function upstreamTimeoutMs() {
+  const configured = Number(
+    process.env.BACKEND_ANALYSIS_TIMEOUT_SECONDS ??
+      DEFAULT_UPSTREAM_TIMEOUT_SECONDS,
+  );
+  const seconds = Number.isFinite(configured)
+    ? Math.min(3_660, Math.max(60, configured))
+    : DEFAULT_UPSTREAM_TIMEOUT_SECONDS;
+  return seconds * 1_000;
+}
 
 function errorResponse(status: number, code: string, message: string) {
   return Response.json({ error: { code, message } }, { status });
@@ -35,7 +46,8 @@ export async function POST(request: Request) {
   }
 
   const timeout = new AbortController();
-  const timeoutId = setTimeout(() => timeout.abort(), UPSTREAM_TIMEOUT_MS);
+  const timeoutMs = upstreamTimeoutMs();
+  const timeoutId = setTimeout(() => timeout.abort(), timeoutMs);
 
   try {
     const upstreamHeaders: Record<string, string> = {
@@ -67,7 +79,8 @@ export async function POST(request: Request) {
       return errorResponse(
         504,
         "BACKEND_TIMEOUT",
-        "分析耗时超过 3 分钟，请稍后重试或上传更精简的文件。",
+        `分析耗时超过 ${Math.round(timeoutMs / 60_000)} 分钟，网站已停止等待。` +
+          "云端分析此前可能仍在运行，请检查 Python 后端日志。",
       );
     }
     return errorResponse(

@@ -9,6 +9,7 @@ React 只负责文件选择、市场选择和结果展示。同源 `/api/analyze
 ```dotenv
 BACKEND_BASE_URL=http://127.0.0.1:8001
 BACKEND_APP_TOKEN=local-development-token
+BACKEND_ANALYSIS_TIMEOUT_SECONDS=660
 PUBLIC_SITE_URL=http://localhost:3001
 ```
 

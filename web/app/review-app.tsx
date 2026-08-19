@@ -35,6 +35,7 @@ const PRIORITY_RANK: Record<Priority, number> = {
 
 interface Evidence {
   source: string;
+  references?: string[];
   observation: string;
 }
 
@@ -60,8 +61,13 @@ interface DocumentPreviewSection {
 
 interface PreviewTableBlock {
   type: "table";
-  headers: string[];
-  rows: string[][];
+  headers: PreviewCell[];
+  rows: PreviewCell[][];
+}
+
+interface PreviewCell {
+  value: string;
+  reference?: string;
 }
 
 interface PreviewTextBlock {
@@ -237,21 +243,25 @@ const TABLE_HEADER_PATTERN =
 const FINANCIAL_TOTAL_PATTERN =
   /^(毛利|营业利润|经营利润|税前利润|净利润|归母净利润|合计|总计|小计|gross profit|operating (income|profit)|net income|adjusted ebitda|ebitda)$/i;
 
-function cleanParsedCell(value: string, isParserRow: boolean) {
+function parsePreviewCell(value: string, isParserRow: boolean): PreviewCell {
   const trimmed = value.trim();
-  if (!isParserRow) return trimmed;
+  if (!isParserRow) return { value: trimmed };
+  const reference = /（([A-Z]+\d+|T\d+:R\d+:C\d+)）=/.exec(trimmed)?.[1];
   const separator = trimmed.indexOf("=");
-  return separator === -1 ? trimmed : trimmed.slice(separator + 1).trim();
+  return {
+    value: separator === -1 ? trimmed : trimmed.slice(separator + 1).trim(),
+    reference,
+  };
 }
 
-function looksLikeTableHeader(cells: string[]) {
-  return cells.some((cell) => TABLE_HEADER_PATTERN.test(cell.trim()));
+function looksLikeTableHeader(cells: PreviewCell[]) {
+  return cells.some((cell) => TABLE_HEADER_PATTERN.test(cell.value.trim()));
 }
 
 function parsePreviewBlocks(content: string): PreviewBlock[] {
   const blocks: PreviewBlock[] = [];
   let textLines: string[] = [];
-  let tableRows: string[][] = [];
+  let tableRows: PreviewCell[][] = [];
   let tableHasExplicitHeader = false;
 
   const flushText = () => {
@@ -264,7 +274,10 @@ function parsePreviewBlocks(content: string): PreviewBlock[] {
     const columnCount = Math.max(...tableRows.map((row) => row.length));
     const normalizedRows = tableRows.map((row) => [
       ...row,
-      ...Array(Math.max(0, columnCount - row.length)).fill(""),
+      ...Array.from(
+        { length: Math.max(0, columnCount - row.length) },
+        () => ({ value: "" }),
+      ),
     ]);
     const firstRow = normalizedRows[0];
     const hasHeader =
@@ -291,6 +304,11 @@ function parsePreviewBlocks(content: string): PreviewBlock[] {
       flushText();
       continue;
     }
+    if (/^\[P\d+\]/.test(line)) {
+      flushTable();
+      textLines.push(line);
+      continue;
+    }
 
     const parts = line.split(/\s*\|\s*/);
     if (parts.length >= 2) {
@@ -300,8 +318,10 @@ function parsePreviewBlocks(content: string): PreviewBlock[] {
         tableHasExplicitHeader = true;
       }
       const cells = (isParserRow ? parts.slice(1) : parts)
-        .map((cell) => cleanParsedCell(cell, isParserRow))
-        .filter((cell, index, values) => cell || index < values.length - 1);
+        .map((cell) => parsePreviewCell(cell, isParserRow))
+        .filter(
+          (cell, index, values) => cell.value || index < values.length - 1,
+        );
       if (cells.length) tableRows.push(cells);
       continue;
     }
@@ -344,14 +364,46 @@ function previewCellClass(value: string, columnIndex: number) {
     .join(" ");
 }
 
-function isFinancialTotalRow(row: string[]) {
-  return FINANCIAL_TOTAL_PATTERN.test((row[0] ?? "").trim());
+function isFinancialTotalRow(row: PreviewCell[]) {
+  return FINANCIAL_TOTAL_PATTERN.test((row[0]?.value ?? "").trim());
+}
+
+function normalizedSourceLocator(locator: string) {
+  return locator.trim().replace(/\s+/g, " ");
+}
+
+function normalizedEvidenceReference(reference: string) {
+  return reference.trim().toUpperCase();
+}
+
+function sourceReferenceKey(locator: string, reference: string) {
+  return `${normalizedSourceLocator(locator)}::${normalizedEvidenceReference(reference)}`;
+}
+
+function sourceRowKey(locator: string, reference: string) {
+  const normalized = normalizedEvidenceReference(reference);
+  const spreadsheetCell = /^[A-Z]+(\d+)$/.exec(normalized);
+  if (spreadsheetCell) {
+    return `${normalizedSourceLocator(locator)}::ROW:${spreadsheetCell[1]}`;
+  }
+  const wordTableCell = /^(T\d+:R\d+):C\d+$/.exec(normalized);
+  if (wordTableCell) {
+    return `${normalizedSourceLocator(locator)}::${wordTableCell[1]}`;
+  }
+  return sourceReferenceKey(locator, normalized);
+}
+
+function parsePreviewTextLine(line: string) {
+  const match = /^\[(P\d+)\]\s*(.*)$/.exec(line.trim());
+  return match
+    ? { reference: match[1], content: match[2] }
+    : { reference: undefined, content: line };
 }
 
 function buildPreviewTableHtml(block: PreviewTableBlock) {
   const headerHtml = block.headers.length
     ? `<thead><tr>${block.headers
-        .map((header) => `<th>${escapeHtml(header)}</th>`)
+        .map((header) => `<th>${escapeHtml(header.value)}</th>`)
         .join("")}</tr></thead>`
     : "";
   const rowsHtml = block.rows
@@ -361,7 +413,7 @@ function buildPreviewTableHtml(block: PreviewTableBlock) {
           ${row
             .map(
               (cell, columnIndex) =>
-                `<td class="${previewCellClass(cell, columnIndex)}">${escapeHtml(formatPreviewValue(cell))}</td>`,
+                `<td class="${previewCellClass(cell.value, columnIndex)}">${escapeHtml(formatPreviewValue(cell.value))}</td>`,
             )
             .join("")}
         </tr>`,
@@ -379,7 +431,10 @@ function buildDocumentPreviewHtml(sections: DocumentPreviewSection[]) {
             ? buildPreviewTableHtml(block)
             : `<div class="source-text">${block.content
                 .split("\n")
-                .map((line) => `<p>${escapeHtml(line)}</p>`)
+                .map(
+                  (line) =>
+                    `<p>${escapeHtml(parsePreviewTextLine(line).content)}</p>`,
+                )
                 .join("")}</div>`,
         )
         .join("");
@@ -392,15 +447,52 @@ function buildDocumentPreviewHtml(sections: DocumentPreviewSection[]) {
     .join("");
 }
 
-function PreviewTable({ block }: { block: PreviewTableBlock }) {
+function PreviewTable({
+  block,
+  locator,
+  highlightedRows,
+  onReferenceRef,
+}: {
+  block: PreviewTableBlock;
+  locator: string;
+  highlightedRows: Set<string>;
+  onReferenceRef?: (key: string, element: HTMLElement | null) => void;
+}) {
+  const referenceProps = (cell: PreviewCell) => {
+    if (!cell.reference) return {};
+    const key = sourceReferenceKey(locator, cell.reference);
+    return {
+      "data-source-reference": cell.reference,
+      ref: (element: HTMLTableCellElement | null) =>
+        onReferenceRef?.(key, element),
+    };
+  };
+  const rowIsHighlighted = (cells: PreviewCell[]) =>
+    cells.some(
+      (cell) =>
+        cell.reference &&
+        highlightedRows.has(sourceRowKey(locator, cell.reference)),
+    );
+
   return (
     <div className="preview-table-shell">
       <table className="financial-table">
         {block.headers.length > 0 && (
           <thead>
-            <tr>
+            <tr
+              className={
+                rowIsHighlighted(block.headers)
+                  ? "is-reference-row-highlighted"
+                  : ""
+              }
+            >
               {block.headers.map((header, index) => (
-                <th key={`${header}-${index}`}>{header || `列 ${index + 1}`}</th>
+                <th
+                  key={`${header.value}-${index}`}
+                  {...referenceProps(header)}
+                >
+                  {header.value || `列 ${index + 1}`}
+                </th>
               ))}
             </tr>
           </thead>
@@ -408,15 +500,18 @@ function PreviewTable({ block }: { block: PreviewTableBlock }) {
         <tbody>
           {block.rows.map((row, rowIndex) => (
             <tr
-              className={isFinancialTotalRow(row) ? "is-total" : ""}
-              key={`${row[0] ?? "row"}-${rowIndex}`}
+              className={`${isFinancialTotalRow(row) ? "is-total" : ""} ${
+                rowIsHighlighted(row) ? "is-reference-row-highlighted" : ""
+              }`}
+              key={`${row[0]?.value ?? "row"}-${rowIndex}`}
             >
               {row.map((cell, columnIndex) => (
                 <td
-                  className={previewCellClass(cell, columnIndex)}
-                  key={`${columnIndex}-${cell}`}
+                  className={previewCellClass(cell.value, columnIndex)}
+                  key={`${columnIndex}-${cell.value}`}
+                  {...referenceProps(cell)}
                 >
-                  {formatPreviewValue(cell)}
+                  {formatPreviewValue(cell.value)}
                 </td>
               ))}
             </tr>
@@ -429,10 +524,21 @@ function PreviewTable({ block }: { block: PreviewTableBlock }) {
 
 function DocumentPreviewSections({
   sections,
+  highlightedLocators = new Set<string>(),
+  highlightedReferences = new Set<string>(),
+  highlightedRows = new Set<string>(),
+  onSectionRef,
+  onReferenceRef,
 }: {
   sections: DocumentPreviewSection[];
+  highlightedLocators?: Set<string>;
+  highlightedReferences?: Set<string>;
+  highlightedRows?: Set<string>;
+  onSectionRef?: (locator: string, element: HTMLElement | null) => void;
+  onReferenceRef?: (key: string, element: HTMLElement | null) => void;
 }) {
   return sections.map((section, sectionIndex) => {
+    const normalizedLocator = normalizedSourceLocator(section.locator);
     const blocks = parsePreviewBlocks(section.content);
     const dataRows = blocks.reduce(
       (count, block) => count + (block.type === "table" ? block.rows.length : 0),
@@ -440,8 +546,14 @@ function DocumentPreviewSections({
     );
     return (
       <section
-        className="source-preview-section"
+        className={`source-preview-section ${
+          highlightedLocators.has(normalizedLocator)
+            ? "is-evidence-highlighted"
+            : ""
+        }`}
+        data-source-locator={normalizedLocator}
         key={`${section.locator}-${sectionIndex}`}
+        ref={(element) => onSectionRef?.(normalizedLocator, element)}
       >
         <div className="source-section-heading">
           <h4>{section.locator}</h4>
@@ -450,12 +562,37 @@ function DocumentPreviewSections({
         <div className="source-section-body">
           {blocks.map((block, blockIndex) =>
             block.type === "table" ? (
-              <PreviewTable block={block} key={`table-${blockIndex}`} />
+              <PreviewTable
+                block={block}
+                locator={normalizedLocator}
+                highlightedRows={highlightedRows}
+                onReferenceRef={onReferenceRef}
+                key={`table-${blockIndex}`}
+              />
             ) : (
               <div className="source-text-block" key={`text-${blockIndex}`}>
-                {block.content.split("\n").map((line, lineIndex) => (
-                  <p key={`${lineIndex}-${line}`}>{line}</p>
-                ))}
+                {block.content.split("\n").map((line, lineIndex) => {
+                  const parsedLine = parsePreviewTextLine(line);
+                  const referenceKey = parsedLine.reference
+                    ? sourceReferenceKey(normalizedLocator, parsedLine.reference)
+                    : null;
+                  return (
+                    <p
+                      className={
+                        referenceKey && highlightedReferences.has(referenceKey)
+                          ? "is-reference-highlighted"
+                          : ""
+                      }
+                      data-source-reference={parsedLine.reference}
+                      key={`${lineIndex}-${line}`}
+                      ref={(element) => {
+                        if (referenceKey) onReferenceRef?.(referenceKey, element);
+                      }}
+                    >
+                      {parsedLine.content}
+                    </p>
+                  );
+                })}
               </div>
             ),
           )}
@@ -685,8 +822,23 @@ export function ReviewApp() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [isExporting, setIsExporting] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
+  const [selectedQuestionId, setSelectedQuestionId] = useState<string | null>(
+    null,
+  );
+  const [highlightedSources, setHighlightedSources] = useState<Set<string>>(
+    new Set(),
+  );
+  const [highlightedReferences, setHighlightedReferences] = useState<Set<string>>(
+    new Set(),
+  );
+  const [highlightedRows, setHighlightedRows] = useState<Set<string>>(
+    new Set(),
+  );
   const inputRef = useRef<HTMLInputElement>(null);
   const resultsRef = useRef<HTMLElement>(null);
+  const sourceScrollRef = useRef<HTMLDivElement>(null);
+  const sourceSectionRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const sourceReferenceRefs = useRef<Map<string, HTMLElement>>(new Map());
   const sourceFileUrl = useMemo(() => {
     if (!state.file || fileExtension(state.file.name) !== "pdf") return null;
     return URL.createObjectURL(state.file);
@@ -727,6 +879,12 @@ export function ReviewApp() {
       dispatch({ type: "SET_ERROR", message: validationError });
       return;
     }
+    setSelectedQuestionId(null);
+    setHighlightedSources(new Set());
+    setHighlightedReferences(new Set());
+    setHighlightedRows(new Set());
+    sourceSectionRefs.current.clear();
+    sourceReferenceRefs.current.clear();
     dispatch({ type: "FILE_SELECTED", file });
   };
 
@@ -809,6 +967,90 @@ export function ReviewApp() {
   const orderedQuestions = state.result
     ? sortQuestionsByPriority(state.result.questions)
     : [];
+
+  const registerSourceSection = (
+    locator: string,
+    element: HTMLElement | null,
+  ) => {
+    if (element) sourceSectionRefs.current.set(locator, element);
+    else sourceSectionRefs.current.delete(locator);
+  };
+
+  const registerSourceReference = (
+    key: string,
+    element: HTMLElement | null,
+  ) => {
+    if (element) sourceReferenceRefs.current.set(key, element);
+    else sourceReferenceRefs.current.delete(key);
+  };
+
+  const locateQuestion = (question: ReviewQuestion) => {
+    setSelectedQuestionId(question.id);
+    if (sourceFileUrl) return;
+
+    const referenceKeys = new Set<string>();
+    const rowKeys = new Set<string>();
+    const fallbackLocators = new Set<string>();
+    for (const evidence of question.evidence) {
+      const locator = normalizedSourceLocator(evidence.source);
+      const references = evidence.references ?? [];
+      if (references.length) {
+        for (const reference of references) {
+          referenceKeys.add(sourceReferenceKey(locator, reference));
+          rowKeys.add(sourceRowKey(locator, reference));
+        }
+      } else {
+        fallbackLocators.add(locator);
+      }
+    }
+    setHighlightedReferences(referenceKeys);
+    setHighlightedRows(rowKeys);
+    setHighlightedSources(fallbackLocators);
+
+    window.requestAnimationFrame(() => {
+      const scrollContainer = sourceScrollRef.current;
+      const orderedReferenceKeys = question.evidence.flatMap((evidence) =>
+        (evidence.references ?? []).map((reference) =>
+          sourceReferenceKey(evidence.source, reference),
+        ),
+      );
+      const firstReferenceKey = orderedReferenceKeys.find((key) =>
+        sourceReferenceRefs.current.has(key),
+      );
+      const firstLocator = question.evidence
+        .map((evidence) => normalizedSourceLocator(evidence.source))
+        .find((locator) => sourceSectionRefs.current.has(locator));
+      const target = firstReferenceKey
+        ? sourceReferenceRefs.current.get(firstReferenceKey)
+        : firstLocator
+          ? sourceSectionRefs.current.get(firstLocator)
+          : undefined;
+      if (!scrollContainer || !target) return;
+
+      const containerRect = scrollContainer.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const targetTop =
+        scrollContainer.scrollTop + targetRect.top - containerRect.top - 14;
+      const reduceMotion = window.matchMedia(
+        "(prefers-reduced-motion: reduce)",
+      ).matches;
+      scrollContainer.scrollTo({
+        top: Math.max(0, targetTop),
+        behavior: reduceMotion ? "auto" : "smooth",
+      });
+
+      const tableShell = target.closest<HTMLElement>(".preview-table-shell");
+      if (tableShell) {
+        const tableRect = tableShell.getBoundingClientRect();
+        const horizontalTarget =
+          tableShell.scrollLeft + targetRect.left - tableRect.left - 18;
+        tableShell.scrollTo({
+          left: Math.max(0, horizontalTarget),
+          behavior: reduceMotion ? "auto" : "smooth",
+        });
+      }
+    });
+  };
 
   const downloadReport = async () => {
     if (!state.result || isExporting) return;
@@ -1115,10 +1357,11 @@ export function ReviewApp() {
                   <p>Original statement</p>
                   <h3 id="source-pane-title">原始损益表</h3>
                 </div>
-                <span>{sourceFileUrl ? "原文件预览" : "解析内容"}</span>
+                <span>{sourceFileUrl ? "原文件预览" : "点击质询定位原文"}</span>
               </div>
               <div
                 className="pane-scroll source-scroll"
+                ref={sourceScrollRef}
                 role="region"
                 aria-label="原始损益表滚动预览"
               >
@@ -1131,11 +1374,21 @@ export function ReviewApp() {
                   >
                     <DocumentPreviewSections
                       sections={state.result.documentPreview}
+                      highlightedLocators={highlightedSources}
+                      highlightedReferences={highlightedReferences}
+                      highlightedRows={highlightedRows}
+                      onSectionRef={registerSourceSection}
+                      onReferenceRef={registerSourceReference}
                     />
                   </object>
                 ) : (
                   <DocumentPreviewSections
                     sections={state.result.documentPreview}
+                    highlightedLocators={highlightedSources}
+                    highlightedReferences={highlightedReferences}
+                    highlightedRows={highlightedRows}
+                    onSectionRef={registerSourceSection}
+                    onReferenceRef={registerSourceReference}
                   />
                 )}
               </div>
@@ -1156,36 +1409,48 @@ export function ReviewApp() {
               >
                 {orderedQuestions.map((question, index) => {
                   const isOpen = state.expanded.has(question.id);
+                  const isSelected = selectedQuestionId === question.id;
                   const detailId = `question-detail-${question.id}`;
                   return (
-                    <article className="question-card" key={question.id}>
-                      <button
-                        className="question-toggle"
-                        type="button"
-                        aria-expanded={isOpen}
-                        aria-controls={detailId}
-                        onClick={() =>
-                          dispatch({ type: "TOGGLE_QUESTION", id: question.id })
-                        }
-                      >
-                        <span className="question-index">
-                          {String(index + 1).padStart(2, "0")}
-                        </span>
-                        <span className="question-main">
-                          <span className="question-meta">
-                            <span>{question.category}</span>
-                            <span
-                              className={`priority priority-${question.priority}`}
-                            >
-                              {priorityLabel(question.priority)}
-                            </span>
+                    <article
+                      className={`question-card ${isSelected ? "is-selected" : ""}`}
+                      key={question.id}
+                    >
+                      <div className="question-card-header">
+                        <button
+                          className="question-locate"
+                          type="button"
+                          aria-pressed={isSelected}
+                          title="定位到左侧文件依据"
+                          onClick={() => locateQuestion(question)}
+                        >
+                          <span className="question-index">
+                            {String(index + 1).padStart(2, "0")}
                           </span>
-                          <strong>{question.question}</strong>
-                        </span>
-                        <span className="expand-control" aria-hidden="true">
-                          {isOpen ? "收起 −" : "查看依据 +"}
-                        </span>
-                      </button>
+                          <span className="question-main">
+                            <span className="question-meta">
+                              <span>{question.category}</span>
+                              <span
+                                className={`priority priority-${question.priority}`}
+                              >
+                                {priorityLabel(question.priority)}
+                              </span>
+                            </span>
+                            <strong>{question.question}</strong>
+                          </span>
+                        </button>
+                        <button
+                          className="expand-control"
+                          type="button"
+                          aria-expanded={isOpen}
+                          aria-controls={detailId}
+                          onClick={() =>
+                            dispatch({ type: "TOGGLE_QUESTION", id: question.id })
+                          }
+                        >
+                          {isOpen ? "收起依据 −" : "展开依据 +"}
+                        </button>
+                      </div>
 
                       {isOpen && (
                         <div className="question-details" id={detailId}>
@@ -1199,6 +1464,13 @@ export function ReviewApp() {
                                     key={`${evidence.source}-${evidenceIndex}`}
                                   >
                                     <span>{evidence.source}</span>
+                                    {(evidence.references?.length ?? 0) > 0 && (
+                                      <div className="evidence-references">
+                                        {evidence.references?.map((reference) => (
+                                          <span key={reference}>{reference}</span>
+                                        ))}
+                                      </div>
+                                    )}
                                     <p>{evidence.observation}</p>
                                   </div>
                                 ),
