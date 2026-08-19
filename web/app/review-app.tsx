@@ -21,6 +21,9 @@ const LOADING_STEPS = [
   "正在生成并核对质询问题…",
 ];
 const LOADING_STEP_THRESHOLDS = [20, 45, 70];
+// A4 landscape with 10 mm side margins has about 1047 CSS pixels of usable width.
+// Keep a small safety allowance because html2pdf floors that value before capture.
+const PDF_REPORT_WIDTH_PX = 1040;
 
 type Priority = "high" | "medium" | "low";
 
@@ -138,7 +141,7 @@ function reducer(state: State, action: Action): State {
         status: "success",
         result: action.result,
         error: null,
-        expanded: new Set(action.result.questions.map((question) => question.id)),
+        expanded: new Set(),
         progress: 100,
       };
     case "TOGGLE_QUESTION": {
@@ -572,9 +575,9 @@ function buildAnalysisReport(result: AnalysisResult) {
 
   return `
   <style>
-    .pdf-report { --ink:#171715; --muted:#6f6e68; --line:#d8d7d0; --accent:#ffd735; width:1070px; padding:0; background:white; color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; line-height:1.5; }
+    .pdf-report { --ink:#171715; --muted:#6f6e68; --line:#d8d7d0; --accent:#ffd735; width:${PDF_REPORT_WIDTH_PX}px; max-width:${PDF_REPORT_WIDTH_PX}px; padding:0; overflow:hidden; background:white; color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; line-height:1.5; }
     .pdf-report * { box-sizing:border-box; }
-    .pdf-report .report-page { width:1070px; min-height:690px; background:#fff; break-after:page; page-break-after:always; }
+    .pdf-report .report-page { width:${PDF_REPORT_WIDTH_PX}px; max-width:100%; min-height:690px; overflow:hidden; background:#fff; break-after:page; page-break-after:always; }
     .pdf-report .report-page:last-child { break-after:auto; page-break-after:auto; }
     .pdf-report .report-header { display:flex; align-items:flex-end; justify-content:space-between; gap:24px; margin-bottom:14px; padding:20px 24px; border-radius:14px; background:var(--ink); color:white; }
     .pdf-report .eyebrow,.pdf-report .meta { margin:0; color:#b18c00; font-size:9px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
@@ -582,7 +585,7 @@ function buildAnalysisReport(result: AnalysisResult) {
     .pdf-report .report-meta { color:#c9c8c1; font-size:10px; text-align:right; }
     .pdf-report .report-meta p { margin:3px 0; }
     .pdf-report .report-grid { display:grid; grid-template-columns:minmax(0,.92fr) minmax(0,1.08fr); gap:14px; align-items:start; }
-    .pdf-report .report-column { min-width:0; padding:14px; border:1px solid var(--line); border-radius:12px; background:#fff; }
+    .pdf-report .report-column { min-width:0; padding:14px; overflow-wrap:anywhere; border:1px solid var(--line); border-radius:12px; background:#fff; }
     .pdf-report .column-title { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 12px; padding-bottom:9px; border-bottom:2px solid var(--ink); }
     .pdf-report .column-title h2 { margin:0; font-size:15px; }
     .pdf-report .column-title span { color:var(--muted); font-size:8px; }

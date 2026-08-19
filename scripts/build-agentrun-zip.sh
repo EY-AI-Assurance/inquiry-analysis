@@ -59,3 +59,4 @@ mkdir -p "$(dirname "${output_path}")"
 
 echo "已生成：${output_path}"
 echo "控制台运行时请选择 Python 3.10，启动命令使用 python3 main.py，端口使用 9000。"
+echo "请在 Agent Run Runtime 环境变量中显式配置 MODEL_SERVICE_NAME、MODEL_NAME 和 MODEL_ENABLE_SEARCH；本地 env 文件不会进入 ZIP。"

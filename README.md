@@ -92,11 +92,12 @@ conda env update -n inquiry-analysis -f environment.yml --prune
 ```bash
 cd /Users/yixuanma/Desktop/EY/inquiry-analysis/backend
 conda activate inquiry-analysis
-set -a
-source .env
-set +a
 python app/main.py
 ```
+
+后端启动时会自动读取 `backend/.env`；不再要求每个新终端手动执行 `source .env`。
+本地文件会覆盖旧 Terminal 中遗留的同名变量。线上部署不要携带 `.env`，改用部署
+平台注入的环境变量。
 
 默认 `.env` 已设置 `ANALYSIS_MODE=mock`，后端地址是 `http://127.0.0.1:8001`。当前使用 8001 是因为电脑上的旧开发进程已经占用了 8000。检查：
 
@@ -127,7 +128,9 @@ cd /Users/yixuanma/Desktop/EY/inquiry-analysis
 cp agentrun-agent.env.example agentrun-agent.env
 ```
 
-在 `agentrun-agent.env` 填写 Agent Run 控制台中的 `MODEL_SERVICE_NAME`，以及本机调用该模型服务需要的阿里云凭证。该文件不能上传或提交。
+在 `agentrun-agent.env` 填写 Agent Run 控制台中的 `MODEL_SERVICE_NAME` 和具体的
+`MODEL_NAME`，以及本机调用该模型服务需要的阿里云凭证。`main.py` 在本地会自动
+读取这个文件；该文件不能上传或提交。
 
 ### 2. 安装并启动最小 Agent
 
@@ -150,6 +153,10 @@ python main.py
 curl http://127.0.0.1:9000/health
 ```
 
+响应中的 `modelServiceName`、`modelName` 和 `modelSelectionMode` 用于确认当前进程
+实际加载的配置。`localEnvLoaded=true` 只会出现在本地；Agent Run 云端应为 `false`，
+因为云端设置来自 Runtime 环境变量，而不是本地文件。
+
 ### 3. 让业务后端调用它
 
 修改 `backend/.env`：
@@ -158,6 +165,8 @@ curl http://127.0.0.1:9000/health
 ANALYSIS_MODE=agentrun
 AGENTRUN_CHAT_COMPLETIONS_URL=http://127.0.0.1:9000/openai/v1/chat/completions
 AGENTRUN_API_KEY=
+AGENTRUN_MODEL_NAME=qwen3.7-plus
+AGENTRUN_ENABLE_SEARCH=true
 ```
 
 重启 `backend/app/main.py`。React 不需要修改。
@@ -193,8 +202,18 @@ dist/agentrun-agent-python310-linux-amd64.zip
 - 启动命令：`python3 main.py`；
 - 端口：`9000`；
 - 健康检查：`/health`；
-- 环境变量：`MODEL_SERVICE_NAME`、可选 `MODEL_NAME`、`AGENT_PORT=9000`；
+- Runtime 环境变量：必须同时配置 `MODEL_SERVICE_NAME`、`MODEL_NAME`，并配置
+  `MODEL_ENABLE_SEARCH=true`、`AGENT_PORT=9000`；
 - 不上传任何 `.env`、Skill、业务 Prompt、用户文件或 React 文件。
+
+`agentrun-agent.env` 不会进入 ZIP，这是有意的安全设计。上传代码包后，需要在
+Agent Run 控制台的 Runtime 配置中再次填写同样的 `MODEL_SERVICE_NAME` 和
+`MODEL_NAME`。新代码缺少任一变量都会启动失败，不再静默使用模型服务默认模型。
+Runtime 还会校验每次请求体中的 `model` 必须与 `MODEL_NAME` 完全相同，并把
+`enable_search` 通过 LangChain `extra_body` 转发给百炼。
+
+发布后，可将 chat URL 末尾的 `/openai/v1/chat/completions` 替换为 `/health`，并使用
+相同的 endpoint 凭证调用。返回的 `modelName` 应当与 Runtime 环境变量完全一致。
 
 发布 endpoint 后，把控制台给出的完整 OpenAI-compatible chat URL 和凭证写入 `backend/.env`：
 
@@ -204,6 +223,8 @@ AGENTRUN_CHAT_COMPLETIONS_URL=https://你的完整调用地址
 AGENTRUN_API_KEY=你的endpoint凭证
 AGENTRUN_AUTH_HEADER=X-API-Key
 AGENTRUN_AUTH_SCHEME=
+AGENTRUN_MODEL_NAME=qwen3.7-plus
+AGENTRUN_ENABLE_SEARCH=true
 ```
 
 上述默认配置会发送 `X-API-Key: <凭证>`。如果控制台生成的调用示例明确使用

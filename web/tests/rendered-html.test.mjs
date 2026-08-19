@@ -50,6 +50,10 @@ test("client includes report download and estimated progress controls", async ()
   assert.match(source, /\.from\(report\)\.save\(\)/);
   assert.match(source, /document\.fonts\.ready/);
   assert.match(source, /sortQuestionsByPriority\(state\.result\.questions\)/);
+  assert.match(
+    source,
+    /case "ANALYSIS_SUCCEEDED":[\s\S]*?expanded: new Set\(\),/,
+  );
   assert.match(source, /拟答复策略/);
   assert.match(source, /documentPreview/);
   assert.match(source, /Python 后端版本未更新/);
@@ -60,6 +64,7 @@ test("client includes report download and estimated progress controls", async ()
   assert.match(source, /原始损益表/);
   assert.match(source, /质询问题、依据与推荐解答/);
   assert.match(source, /orientation: "landscape"/);
+  assert.match(source, /PDF_REPORT_WIDTH_PX = 1040/);
   assert.match(source, /evidenceLocations/);
   assert.match(source, /report-page/);
 });
